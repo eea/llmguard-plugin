@@ -28,12 +28,12 @@ class eeaGuardrail(CustomGuardrail):
             "completion",
             "text_completion",
         ],
+        handle_error: bool=False
     ) -> Optional[Union[Exception, str, dict]]:
         """
         Runs before the LLM API call
         Runs on only Input
         """
-
         _messages = data.get("messages")
         error = None
         if _messages:
@@ -48,13 +48,28 @@ class eeaGuardrail(CustomGuardrail):
                         result = llm_guard_response.json()
                         if not result.get("is_valid", False):
                             error=llm_guard_response.text
-                        message["content"] = LLM_GUARD_RESPONSE_PROMPT
+                            message["content"] = LLM_GUARD_RESPONSE_PROMPT
 
                     else:
                         error=llm_guard_response.text
                         message["content"] = LLM_GUARD_RESPONSE_PROMPT
         if error is not None:
+            if not handle_error:
+                raise ValueError(error)
             pass
 
         return data
 
+
+class eeaGuardrail_noerror(eeaGuardrail):
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict,
+        call_type: Literal[
+            "completion",
+            "text_completion",
+        ],
+    ) -> Optional[Union[Exception, str, dict]]:
+        return await super().async_pre_call_hook(user_api_key_dict, cache, data, call_type, True)

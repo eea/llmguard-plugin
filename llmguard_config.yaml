@@ -1,4 +1,9 @@
 guardrails:
+  - guardrail_name: "EEA-pre-guard_noerror"
+    litellm_params:
+      guardrail: eea_guardrail.eeaGuardrail_noerror
+      mode: "pre_call"
+
   - guardrail_name: "EEA-pre-guard"
     litellm_params:
       guardrail: eea_guardrail.eeaGuardrail

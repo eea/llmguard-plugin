@@ -56,7 +56,6 @@ class eeaGuardrail(CustomGuardrail):
         if error is not None:
             if not handle_error:
                 raise ValueError(error)
-            pass
 
         return data
 

@@ -1,0 +1,1 @@
+litellm --config ./litellm/test_cfg.yaml

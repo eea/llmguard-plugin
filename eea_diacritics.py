@@ -5,6 +5,7 @@ from typing import Any, List, Dict, AsyncGenerator, Tuple
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.types.utils import ModelResponse, ModelResponseStream
 import difflib
+import time
 
 class DiacriticTagResolver(CustomGuardrail):
     def __init__(self, **kwargs):
@@ -247,6 +248,7 @@ class DiacriticTagResolver(CustomGuardrail):
         data: dict,
         response: Any,
     ) -> Any:
+        start_time = time.time()
         self._log("Processing: NORMAL CALLBACK", is_important=True)
         try:
             # 1. Build context registry from input
@@ -256,7 +258,6 @@ class DiacriticTagResolver(CustomGuardrail):
             if isinstance(response, ModelResponse) and response.choices:
                 message = response.choices[0].message
                 if message.content:
-                    print(message.content)
                     resolved, any_matched = self._resolve_text(message.content, registry)
                     message.content = resolved
                     if not any_matched and registry:
@@ -264,6 +265,8 @@ class DiacriticTagResolver(CustomGuardrail):
         except Exception as e:
             self._log(f"Error in sync hook: {str(e)}")
         
+        duration = time.time() - start_time
+        self._log(f"NORMAL CALLBACK processing overhead: {duration:.3f}s")
         return response
 
     async def async_post_call_streaming_iterator_hook(
@@ -272,17 +275,22 @@ class DiacriticTagResolver(CustomGuardrail):
         response: Any,
         request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream, None]:
+        total_p_time = 0
         self._log("Processing: STREAMING", is_important=True)
         try:
             # 1. Build context registry
+            p_start = time.time()
             registry = self._build_registry(request_data)
+            total_p_time += time.time() - p_start
 
             buffer = ""
             any_matched_total = False
             
             async for chunk in response:
+                p_start = time.time()
                 delta_obj = chunk.choices[0].delta
                 if not (chunk.choices and hasattr(delta_obj, "content") and delta_obj.content):
+                    total_p_time += time.time() - p_start
                     yield chunk
                     continue
 
@@ -296,8 +304,10 @@ class DiacriticTagResolver(CustomGuardrail):
                         if matched: any_matched_total = True
                         chunk.choices[0].delta.content = resolved
                         buffer = ""
+                        total_p_time += time.time() - p_start
                         yield chunk
                     else:
+                        total_p_time += time.time() - p_start
                         continue
                 else:
                     # 2. For untagged names, we buffer until we hit a word boundary
@@ -306,19 +316,26 @@ class DiacriticTagResolver(CustomGuardrail):
                         if matched: any_matched_total = True
                         chunk.choices[0].delta.content = resolved
                         buffer = ""
+                        total_p_time += time.time() - p_start
                         yield chunk
                     elif len(buffer) > 100:
                         resolved, matched = self._resolve_text(buffer, registry)
                         if matched: any_matched_total = True
                         chunk.choices[0].delta.content = resolved
                         buffer = ""
+                        total_p_time += time.time() - p_start
                         yield chunk
                     else:
+                        total_p_time += time.time() - p_start
                         continue
             
+            p_start = time.time()
             if not any_matched_total and registry:
                  self._log("!!! NO NAMES MATCHED AGAINST REGISTRY IN STREAM !!!", is_important=True)
+            total_p_time += time.time() - p_start
         except Exception as e:
             self._log(f"Error in streaming hook: {str(e)}")
             async for chunk in response:
                 yield chunk
+        
+        self._log(f"STREAMING processing overhead: {total_p_time:.3f}s")

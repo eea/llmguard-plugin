@@ -10,9 +10,13 @@ import time
 class DiacriticTagResolver(CustomGuardrail):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.logging_enabled = kwargs.get("logging", True)
 
     def _log(self, message: str, is_important: bool = False):
         """Helper for consistent, high-visibility logging."""
+        if not self.logging_enabled:
+            return
+            
         prefix = "[EEA-DIACRITICS]"
         if is_important:
             print(f"\n{prefix} ################################################")

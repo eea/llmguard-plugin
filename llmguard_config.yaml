@@ -16,3 +16,4 @@ guardrails:
       guardrail: eea_diacritics.DiacriticTagResolver
       mode: ["pre_call", "post_call"]
       default_on: true
+      logging: false

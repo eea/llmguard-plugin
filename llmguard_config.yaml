@@ -3,8 +3,16 @@ guardrails:
     litellm_params:
       guardrail: eea_guardrail.eeaGuardrail_noerror
       mode: "pre_call"
+      default_on: true
 
   - guardrail_name: "EEA-pre-guard"
     litellm_params:
       guardrail: eea_guardrail.eeaGuardrail
       mode: "pre_call"
+#      default_on: true
+
+#  - guardrail_name: "diacritic-tag-resolver"
+#    litellm_params:
+#      guardrail: eea_diacritics.DiacriticTagResolver
+#      mode: ["pre_call", "post_call"]
+#      default_on: true

@@ -16,7 +16,7 @@ class DiacriticTagResolver(CustomGuardrail):
         """Helper for consistent, high-visibility logging."""
         if not self.logging_enabled:
             return
-            
+
         prefix = "[EEA-DIACRITICS]"
         if is_important:
             print(f"\n{prefix} ################################################")
@@ -29,14 +29,14 @@ class DiacriticTagResolver(CustomGuardrail):
         """Returns normalized slug for matching. Aggressive mode strips all punctuation/spaces."""
         if not text: return ""
         text_str = str(text).lower()
-        
+
         if aggressive:
             # Handle common LLM replacements for diacritics
             # e.g. "ae" instead of "ä", "oe" instead of "ö"
             text_str = text_str.replace("ae", "a").replace("oe", "o").replace("ue", "u")
             # Strip all non-alphanumeric characters
             text_str = re.sub(r'[^a-z0-9À-ÿ]', '', text_str)
-            
+
         normalized = unicodedata.normalize('NFKD', text_str)
         slug = "".join(c for c in normalized if not unicodedata.combining(c))
         return slug
@@ -44,16 +44,16 @@ class DiacriticTagResolver(CustomGuardrail):
     def _scan_obj_for_names(self, obj: Any, registry: Dict[str, Dict[str, Any]], source: str = "unknown"):
         """Recursively scans objects (strings, dicts, lists) for names with diacritics."""
         name_pattern = re.compile(r'([A-ZÀ-ÿ][a-zà-ÿÀ-ÿ]*(?:[\s-][A-ZÀ-ÿ][a-zà-ÿÀ-ÿ]*)*)')
-        
+
         if isinstance(obj, str):
             candidates = name_pattern.findall(obj)
             for cand in candidates:
                 cand = cand.strip()
                 if not cand: continue
-                
+
                 slug = self._get_slug(cand)
                 # self._log(f"Candidate Match: '{cand}' -> slug: '{slug}'") # Too noisy?
-                
+
                 if len(cand) < 2 or len(slug) < 2 or not any(c.isalnum() for c in slug):
                     continue
 
@@ -62,7 +62,7 @@ class DiacriticTagResolver(CustomGuardrail):
                 if slug != stripped_low:
                     if slug not in registry or source != "unknown":
                         registry[slug] = {"name": cand, "source": source}
-                    
+
                     # Individual parts (to handle cases where LLM only uses part of the name)
                     for part in re.split(r'[\s-]', cand):
                         part = part.strip()
@@ -82,18 +82,18 @@ class DiacriticTagResolver(CustomGuardrail):
     def _build_registry(self, request_data: Dict) -> Dict[str, Dict[str, Any]]:
         """Scans the entire request for properly spelled names with diacritics."""
         registry = {}
-        
+
         # 1. Scan input messages (lower priority)
         # Skip the last message as it's the current question
         messages = request_data.get("messages", [])
         if len(messages) > 1:
             self._scan_obj_for_names(messages[:-1], registry, source="input_messages")
-        
+
         # 2. Specifically look for RAG documents (high priority)
         litellm_metadata = request_data.get("litellm_params", {}).get("metadata", {})
         if "documents" in litellm_metadata:
              self._scan_obj_for_names(litellm_metadata["documents"], registry, source="context_documents")
-             
+
         # Log the final registry in a readable way
         if registry:
             self._log("Compiled Name Registry from Input Context:")
@@ -101,27 +101,27 @@ class DiacriticTagResolver(CustomGuardrail):
                 self._log(f"  - [{meta['source']}] {slug} -> {meta['name']}")
         else:
             self._log("Registry is EMPTY (No diacritic names found in context documents or messages).")
-            
+
         return registry
 
     def _restore_diacritics_in_hint(self, hint: str, registry: Dict[str, Dict[str, Any]]) -> str:
         """Tries to restore diacritics in the hint by looking for parts of the hint in the registry."""
         if not registry: return hint
-        
+
         # Split by non-alphanumeric but keep them
         words = re.split(r'([^a-zA-Z0-9À-ÿ])', hint)
         changed = False
         for i, word in enumerate(words):
             if not word or not any(c.isalnum() for c in word):
                 continue
-            
+
             slug = self._get_slug(word)
             if slug in registry:
                 meta = registry[slug]
                 if meta["name"] != word:
                     words[i] = meta["name"]
                     changed = True
-        
+
         # Also try combined parts (e.g. Yla-Mononen as a whole)
         if not changed:
             slug = self._get_slug(hint)
@@ -139,12 +139,12 @@ class DiacriticTagResolver(CustomGuardrail):
             return text, False
 
         was_matched = False
-        
+
         # 1. First pass: Resolve {{PERSON:hint}} tags (High Priority)
         def replace_tag(match):
             nonlocal was_matched
             hint = match.group(1).strip()
-            
+
             # 1.1 Try to restore diacritics WITHIN the hint first
             restored_hint = self._restore_diacritics_in_hint(hint, registry)
             if restored_hint != hint:
@@ -153,14 +153,14 @@ class DiacriticTagResolver(CustomGuardrail):
                 return restored_hint
 
             slug = self._get_slug(hint)
-            
+
             # 1.2 Direct match fallback
             meta = registry.get(slug)
             if meta:
                 self._log(f"MATCH FOUND (Tag/Direct): '{{{{PERSON:{hint}}}}}' -> '{meta['name']}'")
                 was_matched = True
                 return meta["name"]
-                
+
             # 1.3 Fuzzy match slug fallback (only if cutoff is high)
             all_slugs = list(registry.keys())
             close_slugs = difflib.get_close_matches(slug, all_slugs, n=1, cutoff=0.9) # Higher cutoff
@@ -169,7 +169,7 @@ class DiacriticTagResolver(CustomGuardrail):
                 self._log(f"MATCH FOUND (Tag/Fuzzy): '{{{{PERSON:{hint}}}}}' -> '{target}'")
                 was_matched = True
                 return target
-            
+
             return hint 
 
         text = re.sub(r'{{PERSON:(.*?)}}', replace_tag, text)
@@ -180,7 +180,7 @@ class DiacriticTagResolver(CustomGuardrail):
             matches = list(name_pattern.finditer(text))
             for match in reversed(matches):
                 cand = match.group(1).strip()
-                
+
                 # Check if it was already resolved (nested or overlapping)
                 # ... skipping for complexity ...
 
@@ -190,7 +190,7 @@ class DiacriticTagResolver(CustomGuardrail):
                     self._log(f"MATCH FOUND (Untagged): '{cand}' -> '{restored}'")
                     was_matched = True
                     text = text[:match.start()] + restored + text[match.end():]
-        
+
         return text, was_matched
 
     async def async_pre_call_hook(
@@ -208,14 +208,14 @@ class DiacriticTagResolver(CustomGuardrail):
                 "CRITICAL: For every person's name in your response, you MUST wrap it in tags using its BEST ASCII APPROXIMATION (e.g., 'Yla-Mononen' instead of 'Ylä-Mononen'). "
                 "Format: {{PERSON: Ascii Name}}. Example: {{PERSON: John Doe}}."
             )
-            
+
             messages = data.get("messages", [])
             # Search for ANY form of our instruction
             already_present = any("{{PERSON:" in str(m.get("content", "")) for m in messages)
-            
+
             if not already_present:
                 self._log("Injecting tagging instruction into prompt (System + Last User).")
-                
+
                 # 1. Add to System Message
                 system_msg = next((m for m in messages if m.get("role") == "system"), None)
                 if system_msg:
@@ -226,7 +226,7 @@ class DiacriticTagResolver(CustomGuardrail):
                         content.insert(0, {"type": "text", "text": f"{instruction}\n\n"})
                 else:
                     messages.insert(0, {"role": "system", "content": instruction})
-                
+
                 # 2. Add as a reminder to the LAST User Message
                 last_user_msg = next((m for m in reversed(messages) if m.get("role") == "user"), None)
                 if last_user_msg:
@@ -257,7 +257,7 @@ class DiacriticTagResolver(CustomGuardrail):
         try:
             # 1. Build context registry from input
             registry = self._build_registry(data)
-            
+
             # 2. Resolve tags in sync response
             if isinstance(response, ModelResponse) and response.choices:
                 message = response.choices[0].message
@@ -268,7 +268,7 @@ class DiacriticTagResolver(CustomGuardrail):
                         self._log("!!! NO NAMES MATCHED AGAINST REGISTRY IN FINAL RESPONSE !!!", is_important=True)
         except Exception as e:
             self._log(f"Error in sync hook: {str(e)}")
-        
+
         duration = time.time() - start_time
         self._log(f"NORMAL CALLBACK processing overhead: {duration:.3f}s")
         return response
@@ -289,7 +289,7 @@ class DiacriticTagResolver(CustomGuardrail):
 
             buffer = ""
             any_matched_total = False
-            
+
             async for chunk in response:
                 p_start = time.time()
                 delta_obj = chunk.choices[0].delta
@@ -332,7 +332,7 @@ class DiacriticTagResolver(CustomGuardrail):
                     else:
                         total_p_time += time.time() - p_start
                         continue
-            
+
             p_start = time.time()
             if not any_matched_total and registry:
                  self._log("!!! NO NAMES MATCHED AGAINST REGISTRY IN STREAM !!!", is_important=True)
@@ -341,5 +341,5 @@ class DiacriticTagResolver(CustomGuardrail):
             self._log(f"Error in streaming hook: {str(e)}")
             async for chunk in response:
                 yield chunk
-        
+
         self._log(f"STREAMING processing overhead: {total_p_time:.3f}s")

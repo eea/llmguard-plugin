@@ -14,7 +14,7 @@ guardrails:
   - guardrail_name: "diacritic-tag-resolver"
     litellm_params:
       guardrail: eea_diacritics.DiacriticTagResolver
-      mode: ["pre_call", "post_call"]
+      mode: ["pre_call", "post_call", "during_call"]
       default_on: false
 #      logging: true
 

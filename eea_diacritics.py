@@ -12,12 +12,69 @@ class DiacriticTagResolver(CustomGuardrail):
         super().__init__(**kwargs)
         self.logging_enabled = kwargs.get("logging", True)
 
+    # Class-level cache for guardrail decisions per request ID
+    # This solves LiteLLM's inconsistent metadata propagation across hooks
+    _request_decision_cache = {}
+
+    def should_run_guardrail(self, data: dict, event_type) -> bool:
+        """
+        Robustly determines if the guardrail should run for this request.
+        Uses a cache keyed by litellm_call_id to ensure consistency across phases.
+        """
+        # If default_on is True, always run (base logic)
+        if self.default_on:
+            return super().should_run_guardrail(data=data, event_type=event_type)
+
+        call_id = data.get("litellm_call_id")
+        guardrail_name = self.guardrail_name
+
+        # 1. Check Cache First
+        if call_id and call_id in self._request_decision_cache:
+            return self._request_decision_cache[call_id]
+
+        # 2. Recursive Search for Guardrail Name
+        def find_guardrail(obj) -> bool:
+            if isinstance(obj, str):
+                return obj == guardrail_name
+            if isinstance(obj, list):
+                return any(find_guardrail(item) for item in obj)
+            if isinstance(obj, dict):
+                # Check for explicit guardrail keys or values
+                if guardrail_name in obj: return True
+                for key, value in obj.items():
+                    if key in ("guardrails", "applied_guardrails", "metadata", "litellm_params", "litellm_metadata"):
+                        if find_guardrail(value): return True
+            return False
+
+        in_requested = find_guardrail(data)
+
+        # 3. Store in Cache if we have a call_id
+        if call_id:
+            # We only cache TRUE results to avoid blocking legitimate requests
+            # if LiteLLM sends empty data early.
+            if in_requested:
+                self._request_decision_cache[call_id] = True
+                # Cleanup old cache entries (simple strategy: if > 1000 items, clear)
+                if len(self._request_decision_cache) > 1000:
+                    self._request_decision_cache.clear()
+                    self._request_decision_cache[call_id] = True
+
+        # Check event type is within our configured mode list
+        if not in_requested:
+            return False
+
+        # If called manually with a string (e.g. from our hooks), bypass base check
+        if isinstance(event_type, str):
+            return True
+
+        return self._event_hook_is_event_type(event_type)
+
     def _log(self, message: str, is_important: bool = False):
         """Helper for consistent, high-visibility logging."""
         if not self.logging_enabled:
             return
 
-        prefix = "[EEA-DIACRITICS]"
+        prefix = "[EEA-DIACRITICS1]"
         if is_important:
             print(f"\n{prefix} ################################################")
             print(f"{prefix} {message}")
@@ -201,6 +258,9 @@ class DiacriticTagResolver(CustomGuardrail):
         call_type: str,
         **kwargs,
     ) -> dict:
+        if not self.should_run_guardrail(data, event_type="pre_call"):
+            return data
+
         self._log("Processing: PRE-CALL HOOK", is_important=True)
         try:
             # Clearer, more concise instruction
@@ -252,6 +312,9 @@ class DiacriticTagResolver(CustomGuardrail):
         data: dict,
         response: Any,
     ) -> Any:
+        if not self.should_run_guardrail(data, event_type="post_call_success"):
+            return response
+
         start_time = time.time()
         self._log("Processing: NORMAL CALLBACK", is_important=True)
         try:
@@ -279,6 +342,11 @@ class DiacriticTagResolver(CustomGuardrail):
         response: Any,
         request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream, None]:
+        if not self.should_run_guardrail(request_data, event_type="post_call_streaming"):
+            async for chunk in response:
+                yield chunk
+            return
+
         total_p_time = 0
         self._log("Processing: STREAMING", is_important=True)
         try:
@@ -292,13 +360,27 @@ class DiacriticTagResolver(CustomGuardrail):
 
             async for chunk in response:
                 p_start = time.time()
-                delta_obj = chunk.choices[0].delta
-                if not (chunk.choices and hasattr(delta_obj, "content") and delta_obj.content):
+
+                # Safely check if chunk has text delta
+                has_text = (
+                    hasattr(chunk, "choices") and chunk.choices and
+                    len(chunk.choices) > 0 and
+                    hasattr(chunk.choices[0], "delta") and
+                    hasattr(chunk.choices[0].delta, "content") and
+                    chunk.choices[0].delta.content
+                )
+
+                if not has_text:
+                    if buffer and hasattr(chunk, "choices") and chunk.choices and len(chunk.choices) > 0 and hasattr(chunk.choices[0], "delta"):
+                        resolved, matched = self._resolve_text(buffer, registry)
+                        if matched: any_matched_total = True
+                        chunk.choices[0].delta.content = resolved
+                        buffer = ""
                     total_p_time += time.time() - p_start
                     yield chunk
                     continue
 
-                delta = delta_obj.content
+                delta = chunk.choices[0].delta.content
                 buffer += delta
                 # Logic for yielding buffer:
                 # 1. If we are in the middle of a tag {{...}}, we must wait for }}
